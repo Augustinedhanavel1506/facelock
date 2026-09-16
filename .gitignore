@@ -1,0 +1,16 @@
+# Virtual environment
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build output
+build/
+dist/
+
+# Local biometric / personal data -- never committed
+data/
+
+# Logs and scratch files
+*.log
