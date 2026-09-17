@@ -58,6 +58,7 @@ class FaceLockApp:
         self.presence_thread = None
         self._display_timeout_cache = None
         self._display_timeout_cache_time = 0.0
+        self._activity_baseline = time.time()
 
         self.bridge = HotkeyBridge()
         self.bridge.trigger.connect(self.show_lock)
@@ -144,6 +145,7 @@ class FaceLockApp:
 
     def _on_unlocked(self):
         self.tray.showMessage("FaceLock", "Access granted.", QSystemTrayIcon.MessageIcon.Information, 2000)
+        self._activity_baseline = time.time()
         self._sync_presence_thread()
 
     def _on_suspicious_activity(self, count):
@@ -168,10 +170,18 @@ class FaceLockApp:
             return max(MIN_IDLE_LOCK_SECONDS, self._display_timeout_cache - IDLE_LOCK_LEAD_SECONDS)
         return self.settings["idle_lock_minutes"] * 60
 
+    def _effective_idle_seconds(self):
+        """Seconds since whichever is more recent: real keyboard/mouse input,
+        or FaceLock's own last unlock. Windows' own idle clock only resets on
+        physical input, so without this an auto-lock triggered by idleness
+        would immediately re-trigger a few seconds after a face-unlock, since
+        looking at the camera doesn't count as "activity" to Windows."""
+        return min(get_idle_seconds(), time.time() - self._activity_baseline)
+
     def _check_idle(self):
         if not self.settings.get("idle_lock_enabled") or self.overlay.isVisible():
             return
-        if get_idle_seconds() >= self._effective_idle_threshold_seconds():
+        if self._effective_idle_seconds() >= self._effective_idle_threshold_seconds():
             self.show_lock()
 
     def _sync_presence_thread(self):
