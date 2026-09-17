@@ -1,4 +1,5 @@
 import sys
+import time
 
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
@@ -14,7 +15,14 @@ from facelock.profiles_dialog import ProfilesDialog
 from facelock.log_dialog import AccessLogDialog
 from facelock.presence import PresenceThread
 from facelock.idle import get_idle_seconds
+from facelock.power_settings import get_display_timeout_seconds
 from facelock.startup import is_startup_enabled, enable_startup, disable_startup
+
+# How much earlier than Windows' own "turn off display" timeout FaceLock
+# should step in, so it reliably takes over before the screen goes dark.
+IDLE_LOCK_LEAD_SECONDS = 15
+MIN_IDLE_LOCK_SECONDS = 30
+DISPLAY_TIMEOUT_CACHE_SECONDS = 60
 
 
 def make_tray_icon() -> QIcon:
@@ -48,6 +56,8 @@ class FaceLockApp:
         self.overlay.suspicious_activity.connect(self._on_suspicious_activity)
         self.enroll_dialog = None
         self.presence_thread = None
+        self._display_timeout_cache = None
+        self._display_timeout_cache_time = 0.0
 
         self.bridge = HotkeyBridge()
         self.bridge.trigger.connect(self.show_lock)
@@ -79,8 +89,7 @@ class FaceLockApp:
         log_action.triggered.connect(self.open_log)
         menu.addSeparator()
 
-        m = self.settings["idle_lock_minutes"]
-        self.idle_action = menu.addAction(f"Auto-lock when idle ({m} min)")
+        self.idle_action = menu.addAction("Auto-lock when idle (synced to screen timeout)")
         self.idle_action.setCheckable(True)
         self.idle_action.setChecked(self.settings["idle_lock_enabled"])
         self.idle_action.triggered.connect(self.toggle_idle_lock)
@@ -146,10 +155,23 @@ class FaceLockApp:
 
     # ---- idle / walk-away auto-lock -------------------------------------
 
+    def _effective_idle_threshold_seconds(self):
+        """Prefer syncing to Windows' own "turn off display after" timeout
+        (minus a lead time) so FaceLock takes over just before the screen
+        would go dark. Falls back to the fixed setting if that can't be
+        read (e.g. the user set display timeout to "Never")."""
+        now = time.time()
+        if now - self._display_timeout_cache_time > DISPLAY_TIMEOUT_CACHE_SECONDS:
+            self._display_timeout_cache = get_display_timeout_seconds()
+            self._display_timeout_cache_time = now
+        if self._display_timeout_cache:
+            return max(MIN_IDLE_LOCK_SECONDS, self._display_timeout_cache - IDLE_LOCK_LEAD_SECONDS)
+        return self.settings["idle_lock_minutes"] * 60
+
     def _check_idle(self):
         if not self.settings.get("idle_lock_enabled") or self.overlay.isVisible():
             return
-        if get_idle_seconds() >= self.settings["idle_lock_minutes"] * 60:
+        if get_idle_seconds() >= self._effective_idle_threshold_seconds():
             self.show_lock()
 
     def _sync_presence_thread(self):
